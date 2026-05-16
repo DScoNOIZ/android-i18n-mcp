@@ -1,8 +1,9 @@
 # Android i18n MCP 服务器
 
 <div align="right">
-  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README.md">English</a> | 
-  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README-ZH.md">中文</a>
+  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README.md">English</a> |
+  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README-ZH.md">中文</a> |
+  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README-RU.md">Русский</a>
 </div>
 
 一个 MCP (Model Context Protocol) 服务器，通过使用 Git diff 检测默认 `strings.xml` 文件的变化，自动将 Android 应用字符串资源翻译成多种语言。
@@ -143,6 +144,54 @@ TRANSLATION_API_KEY = "sk-xxxxxx"
 TRANSLATION_MODEL = "deepseek-chat"
 TRANSLATION_LANGUAGES = "zh-CN,es,fr,de,ja,ko"  # 可选：指定语言，如果项目中不存在则会自动新增并翻译
 TRANSLATOR_SOURCE_LANGUAGE = "en"  # 可选：指定源语言（默认: en）
+```
+
+## 配置系统
+
+### 配置优先级（高 → 低）
+
+```
+1. MCP 调用参数（languages 参数）     ← 最高优先级
+2. mcp_settings.json 环境变量         ← MCP 服务器读取
+3. .env 文件                          ← 仅在 mcp_settings.json 未设置时使用
+4. 内部默认值（全部 28 种语言）        ← 最低优先级
+```
+
+### 工作原理
+
+当您使用 `languages: ["es", "fr"]` 调用 MCP 工具时，这些语言会覆盖任何 `.env` 设置。如果未提供 `languages` 参数，工具将使用环境中的 `TRANSLATION_LANGUAGES`（来自 mcp_settings.json 或 .env 文件）。
+
+```typescript
+// MCP 工具逻辑 (src/index.ts)
+const languages = args.languages?.length ? args.languages : TRANSLATION_LANGUAGES;
+//              ↑ 如果提供了 languages 参数 → 使用它
+//                           ↑ 否则 → 使用环境变量（来自 .env 或 mcp_settings.json）
+```
+
+### 配置源详解
+
+| 来源 | 位置 | 如何工作 | 优先级 |
+|------|------|----------|--------|
+| **MCP 设置** | `~/.config/Code/User/globalStorage/.../mcp_settings.json` | JSON `env` 块传递给服务器进程 | 1st（最高） |
+| **.env 文件** | 项目根目录 `.env` | 服务器启动时通过 `dotenv.config()` 读取 | 2nd |
+| **MCP 调用参数** | 工具调用中的 `languages: ["es", "fr"]` | 直接传递给工具处理器 | 覆盖（最高） |
+
+### 调试配置
+
+服务器启动时会记录配置源：
+```
+Config loaded from: env (.env or mcp_settings)  ← 正常 MCP 模式
+Config loaded from: env                         ← 测试模式（NODE_ENV=test）
+Config loaded from: defaults                    ← 未设置 TRANSLATION_LANGUAGES
+```
+
+验证配置：
+```bash
+# 检查 mcp_settings.json
+cat ~/.config/Code/User/globalStorage/.../mcp_settings.json | grep -A5 '"i18n"'
+
+# 检查 .env
+cat .env | grep TRANSLATION_LANGUAGES
 ```
 
 ## Agent Instruction
@@ -357,6 +406,70 @@ android-i18n-mcp/
 - 删除的字符串会自动从翻译文件中移除
 - 翻译保留 Android 格式化占位符
 - 所有文件操作都是原子的 - 如果任何语言的翻译失败，则不会修改任何文件
+
+## 真实集成测试
+
+项目包含**真实集成测试**（无模拟），用于测试实际的文件系统操作：
+
+### 位置
+- `tests/integration/*.real.test.ts` - 真实文件系统集成测试
+
+### 测试内容
+- 实际的 XML 解析和生成
+- 真实文件系统操作（创建/读取/更新 `strings.xml`）
+- 使用实际文件的端到端翻译工作流
+- 真实 Android 项目结构中的模块检测
+
+### 运行集成测试
+```bash
+# 运行所有集成测试（需要真实的 Android 项目结构）
+npm run test:integration
+
+# 运行特定的集成测试
+npx jest tests/integration/translateModule.real.test.ts
+```
+
+### 模拟翻译模式
+对于单元测试，提供模拟翻译模式：
+```bash
+# 启用模拟翻译（在 jest.setup.js 中设置）
+TRANSLATION_MOCK=true
+```
+
+这允许在没有 API 调用的情况下测试翻译逻辑。
+
+## Bug 修复历史
+
+### BUG-001: translateModule() 缺失文件处理 ✅ 已修复
+**问题：** 当目标翻译文件不存在时，`translateModule()` 失败。
+
+**解决方案：** 现在检查目标文件是否存在，如果缺失则加载所有字符串（而不是仅通过 Git diff 加载更改的字符串）。
+
+**影响：** 支持新创建的语言目录的翻译。
+
+---
+
+### BUG-002: translateLanguage() 错误处理 ✅ 已修复
+**问题：** `translateLanguage()` 直接抛出错误，导致 MCP 工具崩溃。
+
+**解决方案：** 现在在 `result.errors` 数组中返回错误，而不是抛出异常。
+
+**影响：** 更好的错误报告和优雅的失败处理。
+
+---
+
+### BUG-003: validateFileFilter() 正则表达式模式 ✅ 已修复
+**问题：** `validateFileFilter()` 正则表达式无法正确匹配 `values-ru` 样式的文件夹。
+
+**解决方案：** 更新了正则表达式模式，以正确匹配 Android 资源文件夹命名约定。
+
+**影响：** 所有语言变体的正确文件过滤。
+
+---
+
+## E2E 测试
+
+端到端测试（`tests/e2e/run_tests.py`）现在验证上述所有 3 个错误修复。
 
 ## 许可证
 

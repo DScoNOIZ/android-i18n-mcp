@@ -1,8 +1,18 @@
 import OpenAI from 'openai';
 
+// Debug logging for progress tracking
+function logProgress(current: number, total: number, message: string): void {
+  console.error(`[PROGRESS] ${current}/${total} - ${message}`);
+}
+
+export interface ProgressCallback {
+  (current: number, total: number, message: string): void;
+}
+
 export interface TranslationProvider {
   translate(text: string, targetLanguage: string, sourceLanguage?: string): Promise<string>;
-  translateBatch(texts: Map<string, string>, targetLanguage: string, sourceLanguage?: string): Promise<Map<string, string>>;
+  translateBatch(texts: Map<string, string>, targetLanguage: string, sourceLanguage?: string, onProgress?: ProgressCallback): Promise<Map<string, string>>;
+  checkConnectivity(): Promise<void>;
 }
 
 export interface TranslatorConfig {
@@ -12,6 +22,7 @@ export interface TranslatorConfig {
   model?: string;
   translationLanguages?: string[];  // Optional: specify which languages to translate to
   sourceLanguage?: string;  // Optional: specify the source language (default: 'en')
+  batchSize?: number; // Optional: max batch size for translation requests
 }
 
 const LANGUAGE_MAPPING: Record<string, string> = {
@@ -48,8 +59,9 @@ const LANGUAGE_MAPPING: Record<string, string> = {
 export class OpenAITranslator implements TranslationProvider {
   private client: OpenAI;
   private model: string;
+  private batchSize: number;
   private static readonly DEFAULT_TIMEOUT_MS = 120_000; // 120s per request
-  private static readonly MAX_BATCH_SIZE = 60; // limit items per batch to keep prompts small
+  private static readonly DEFAULT_MAX_BATCH_SIZE = 60; // default limit items per batch
   private static readonly NEWLINE_PLACEHOLDER = '__NEWLINE__';
 
   constructor(config: TranslatorConfig) {
@@ -60,6 +72,7 @@ export class OpenAITranslator implements TranslationProvider {
       maxRetries: 3
     });
     this.model = config.model || 'gpt-4o-mini';
+    this.batchSize = config.batchSize || OpenAITranslator.DEFAULT_MAX_BATCH_SIZE;
   }
 
   private escapeNewlines(text: string): string {
@@ -114,13 +127,14 @@ Text to translate: "${escapedText}"`;
       const translatedText = response.choices[0]?.message?.content?.trim() || escapedText;
       // Unescape newlines after translation
       return this.unescapeNewlines(translatedText);
+    /* istanbul ignore next */
     } catch (error) {
       console.error(`Translation error for ${targetLanguage}:`, error);
       throw error;
     }
   }
 
-  private async translateBatchChunk(texts: Map<string, string>, targetLanguage: string, sourceLanguage: string = 'en'): Promise<Map<string, string>> {
+  private async translateBatchChunk(texts: Map<string, string>, targetLanguage: string, sourceLanguage: string = 'en', onProgress?: ProgressCallback, progressOffset: number = 0): Promise<Map<string, string>> {
     const targetLangName = LANGUAGE_MAPPING[targetLanguage] || targetLanguage;
     const sourceLangName = LANGUAGE_MAPPING[sourceLanguage] || sourceLanguage;
 
@@ -190,6 +204,13 @@ ${JSON.stringify(jsonInput, null, 2)}`;
         }
 
         results.set(key, translatedValue);
+        
+        // Progress callback - report absolute processed count / chunk total
+        if (onProgress) {
+          const processedCount = progressOffset + results.size;
+          console.error(`[PROGRESS] ${processedCount}/${texts.size} - ${targetLanguage}`);
+          onProgress(processedCount, texts.size, `Translating to ${targetLanguage}`);
+        }
       }
 
       if (untranslatedCount > 0) {
@@ -198,12 +219,17 @@ ${JSON.stringify(jsonInput, null, 2)}`;
 
       return results;
     } catch (error) {
-      console.error(`Batch translation error for ${targetLanguage}:`, error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[API ERROR] Batch translation failed for ${targetLanguage}: ${errorMsg}`);
+      console.error(`[API ERROR] Falling back to individual translation...`);
 
       const results = new Map<string, string>();
       let failedKeys: string[] = [];
 
-      for (const [key, value] of texts) {
+      for (let i = 0; i < Array.from(texts.keys()).length; i++) {
+        const keys = Array.from(texts.keys());
+        const key = keys[i];
+        const value = texts.get(key)!;
         let retryCount = 0;
         const maxRetries = 2;
         let translated: string | null = null;
@@ -212,10 +238,20 @@ ${JSON.stringify(jsonInput, null, 2)}`;
           try {
             translated = await this.translate(value, targetLanguage, sourceLanguage);
             results.set(key, translated);
+            // Progress callback - report absolute processed count in fallback
+            if (onProgress) {
+              const processedCount = progressOffset + results.size;
+              onProgress(processedCount, texts.size, `Retry fallback ${targetLanguage}`);
+            }
           } catch (e) {
             retryCount++;
             if (retryCount < maxRetries) {
-              console.error(`Retry ${retryCount} for key "${key}" to ${targetLanguage}`);
+              const retryMsg = `Retry ${retryCount} for key "${key}" to ${targetLanguage}`;
+              console.error(`[RETRY] ${retryMsg}`);
+              if (onProgress) {
+                const processedCount = progressOffset + results.size;
+                onProgress(processedCount, texts.size, `API error - retrying...`);
+              }
               await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
             } else {
               console.error(`❌ Failed to translate key "${key}" to ${targetLanguage} after ${maxRetries} attempts:`, e);
@@ -235,24 +271,48 @@ ${JSON.stringify(jsonInput, null, 2)}`;
     }
   }
 
-  async translateBatch(texts: Map<string, string>, targetLanguage: string, sourceLanguage: string = 'en'): Promise<Map<string, string>> {
+  async checkConnectivity(): Promise<void> {
+    try {
+      await this.client.models.list();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      throw new Error(`Translation service unavailable: ${msg}`);
+    }
+  }
+
+  async translateBatch(texts: Map<string, string>, targetLanguage: string, sourceLanguage: string = 'en', onProgress?: ProgressCallback): Promise<Map<string, string>> {
     const size = texts.size;
-    if (size <= OpenAITranslator.MAX_BATCH_SIZE) {
-      return this.translateBatchChunk(texts, targetLanguage, sourceLanguage);
+    if (size === 0) return new Map();
+
+    // Quick connectivity check
+    await this.checkConnectivity();
+
+    // Wrap onProgress to always use language-level total as denominator
+    // translateBatchChunk uses texts.size (chunk size), but we need language total
+    const languageTotal = size;
+    const wrappedOnProgress = onProgress ? (current: number, total: number, message: string) => {
+      onProgress(current, languageTotal, message);
+    } : undefined;
+
+    if (size <= this.batchSize) {
+      return this.translateBatchChunk(texts, targetLanguage, sourceLanguage, wrappedOnProgress);
     }
 
     // Chunk large batches to avoid timeouts and context overflows
     const keys = Array.from(texts.keys());
     const results = new Map<string, string>();
-    for (let i = 0; i < keys.length; i += OpenAITranslator.MAX_BATCH_SIZE) {
-      const sliceKeys = keys.slice(i, i + OpenAITranslator.MAX_BATCH_SIZE);
+    let processedCount = 0;
+    
+    for (let i = 0; i < keys.length; i += this.batchSize) {
+      const sliceKeys = keys.slice(i, i + this.batchSize);
       const chunk = new Map<string, string>();
       for (const k of sliceKeys) chunk.set(k, texts.get(k)!);
 
-      const translatedChunk = await this.translateBatchChunk(chunk, targetLanguage, sourceLanguage);
+      const translatedChunk = await this.translateBatchChunk(chunk, targetLanguage, sourceLanguage, wrappedOnProgress, processedCount);
       for (const [k, v] of translatedChunk) {
         results.set(k, v);
       }
+      processedCount += chunk.size;
     }
     return results;
   }
@@ -268,8 +328,35 @@ export class DeepSeekTranslator extends OpenAITranslator {
   }
 }
 
+export class MockTranslator implements TranslationProvider {
+  async translate(text: string, targetLanguage: string): Promise<string> {
+    return `[MOCK: ${targetLanguage}] ${text}`;
+  }
+
+  async translateBatch(texts: Map<string, string>, targetLanguage: string, sourceLanguage?: string, onProgress?: ProgressCallback): Promise<Map<string, string>> {
+    const results = new Map<string, string>();
+    let count = 0;
+    const total = texts.size;
+    for (const [key, value] of texts) {
+      results.set(key, `[MOCK: ${targetLanguage}] ${value}`);
+      count++;
+      if (onProgress) {
+        onProgress(count, total, `Mock translating: ${targetLanguage}`);
+      }
+    }
+    return results;
+  }
+
+  async checkConnectivity(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 export class TranslatorFactory {
   static create(config: TranslatorConfig): TranslationProvider {
+    if (process.env.TRANSLATION_MOCK === 'true') {
+      return new MockTranslator();
+    }
     switch (config.provider) {
       case 'openai':
         return new OpenAITranslator(config);

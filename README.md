@@ -1,8 +1,9 @@
 # Android i18n MCP Server
 
 <div align="right">
-  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README.md">English</a> | 
-  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README-ZH.md">中文</a>
+  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README.md">English</a> |
+  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README-ZH.md">中文</a> |
+  <a href="https://github.com/realskyrin/android-i18n-mcp/blob/main/README-RU.md">Русский</a>
 </div>
 
 An MCP (Model Context Protocol) server that automatically translates Android app string resources to multiple languages by detecting changes in the default `strings.xml` files using Git diff.
@@ -34,6 +35,8 @@ An MCP (Model Context Protocol) server that automatically translates Android app
 ## Supported Languages
 
 The server supports translation to 28 languages. You can configure which languages to translate to using the `TRANSLATION_LANGUAGES` environment variable.
+
+> **Note on Chinese locale format:** Chinese locales use Android's region suffix format with `r` prefix (e.g., `zh-CN` → `values-zh-rCN`). This is required by Android for region-specific resources.
 
 ### All Supported Languages:
 
@@ -145,6 +148,54 @@ TRANSLATION_LANGUAGES = "zh-CN,es,fr,de,ja,ko"  # Optional: specific languages
 TRANSLATOR_SOURCE_LANGUAGE = "en"  # Optional: source language (default: en)
 ```
 
+## Configuration System
+
+### Configuration Priority (HIGH → LOW)
+
+```
+1. MCP call parameters (languages param)     ← HIGHEST PRIORITY
+2. mcp_settings.json env variables           ← MCP Server reads these
+3. .env file                                  ← Only if mcp_settings.json not set
+4. Internal defaults (all 28 languages)       ← LOWEST PRIORITY
+```
+
+### How It Works
+
+When you call an MCP tool with `languages: ["es", "fr"]`, those languages override any `.env` settings. If no `languages` param is provided, the tool uses `TRANSLATION_LANGUAGES` from the environment (either from mcp_settings.json or .env file).
+
+```typescript
+// MCP tool logic (src/index.ts)
+const languages = args.languages?.length ? args.languages : TRANSLATION_LANGUAGES;
+//              ↑ if languages param provided → use it
+//                           ↑ otherwise → use env variable (from .env or mcp_settings.json)
+```
+
+### Configuration Sources Explained
+
+| Source | Location | How It Works | Priority |
+|--------|----------|--------------|----------|
+| **MCP Settings** | `~/.config/Code/User/globalStorage/.../mcp_settings.json` | JSON `env` block passed to server process | 1st (highest) |
+| **.env file** | Project root `.env` | Read by `dotenv.config()` at server startup | 2nd |
+| **MCP call param** | `languages: ["es", "fr"]` in tool call | Passed directly to tool handler | Override (highest) |
+
+### Debugging Configuration
+
+When the server starts, it logs the configuration source:
+```
+Config loaded from: env (.env or mcp_settings)  ← Normal MCP mode
+Config loaded from: env                         ← Test mode (NODE_ENV=test)
+Config loaded from: defaults                    ← No TRANSLATION_LANGUAGES set
+```
+
+To verify your configuration:
+```bash
+# Check mcp_settings.json
+cat ~/.config/Code/User/globalStorage/.../mcp_settings.json | grep -A5 '"i18n"'
+
+# Check .env
+cat .env | grep TRANSLATION_LANGUAGES
+```
+
 ## Agent Instruction
 
 You can configure AGENTS.md or CLAUDE.md to have the Agent automatically call MCP when strings.xml files are modified:
@@ -161,6 +212,8 @@ Detects changes in all default strings.xml files across all modules and translat
 
 **Parameters:**
 - `projectRoot` (optional): Android project root directory. Uses `ANDROID_PROJECT_ROOT` env var if not provided.
+- `languages` (optional): Array of target language codes. Overrides `TRANSLATION_LANGUAGES` env var.
+- `fileFilter` (optional): Glob pattern to filter files (e.g., `**/values/strings.xml`).
 
 **Example:**
 ```json
@@ -177,6 +230,9 @@ Detects changes in a specific module's default strings.xml and translates to all
 
 **Parameters:**
 - `modulePath` (required): Path to the Android module directory
+- `languages` (optional): Array of target language codes. Overrides `TRANSLATION_LANGUAGES` env var.
+- `fileFilter` (optional): Glob pattern to filter files.
+- `projectRoot` (optional): Android project root directory.
 
 **Example:**
 ```json
@@ -192,7 +248,8 @@ Detects changes in a specific module's default strings.xml and translates to all
 Checks for uncommitted changes in default strings.xml files without performing translation.
 
 **Parameters:**
-- `projectRoot` (optional): Android project root directory
+- `projectRoot` (optional): Android project root directory.
+- `fileFilter` (optional): Glob pattern to filter files.
 
 **Example:**
 ```json
@@ -208,7 +265,9 @@ Checks for uncommitted changes in default strings.xml files without performing t
 Checks which language directories are missing compared to the configured TRANSLATION_LANGUAGES environment variable.
 
 **Parameters:**
-- `projectRoot` (optional): Android project root directory
+- `projectRoot` (optional): Android project root directory.
+- `languages` (optional): Array of language codes to check. Defaults to `TRANSLATION_LANGUAGES` env var.
+- `fileFilter` (optional): Glob pattern to filter files.
 
 **Example:**
 ```json
@@ -224,7 +283,9 @@ Checks which language directories are missing compared to the configured TRANSLA
 Creates missing language directories and translates the default strings.xml into them for all configured languages.
 
 **Parameters:**
-- `projectRoot` (optional): Android project root directory
+- `projectRoot` (optional): Android project root directory.
+- `languages` (optional): Array of language codes to create and translate. Defaults to `TRANSLATION_LANGUAGES` env var.
+- `fileFilter` (optional): Glob pattern to filter files.
 
 **Example:**
 ```json
@@ -252,9 +313,6 @@ Currently supported:
 - **OpenAI** (including OpenAI-compatible APIs)
 - **DeepSeek** (automatically uses api.deepseek.com endpoint)
 
-Planned support:
-- Anthropic Claude
-- Google Translate
 
 ### DeepSeek Configuration Example:
 ```env
@@ -326,13 +384,22 @@ TRANSLATOR_SOURCE_LANGUAGE=ja  # Japanese
 ## Development
 
 Run in development mode with hot reload:
+
 ```bash
 npm run dev
 ```
 
 Build the project:
+
 ```bash
 npm run build
+```
+
+Run tests:
+
+```bash
+npm test
+npm run test:coverage
 ```
 
 ## Project Structure
@@ -357,6 +424,70 @@ android-i18n-mcp/
 - Deleted strings are automatically removed from translated files
 - Translation preserves Android formatting placeholders
 - All file operations are atomic - if translation fails for any language, no files are modified
+
+## Real Integration Tests
+
+The project includes **real integration tests** (no mocks) that test actual file system operations:
+
+### Location
+- `tests/integration/*.real.test.ts` - Real file system integration tests
+
+### What They Test
+- Actual XML parsing and generation
+- Real file system operations (create/read/update `strings.xml`)
+- End-to-end translation workflows with actual files
+- Module detection in real Android project structures
+
+### Running Integration Tests
+```bash
+# Run all integration tests (requires real Android project structure)
+npm run test:integration
+
+# Run specific integration test
+npx jest tests/integration/translateModule.real.test.ts
+```
+
+### Mock Translation Mode
+For unit tests, a mock translation mode is available:
+```bash
+# Enable mock translation (set in jest.setup.js)
+TRANSLATION_MOCK=true
+```
+
+This allows testing translation logic without API calls.
+
+## Bug Fixes History
+
+### BUG-001: translateModule() Missing File Handling ✅ FIXED
+**Problem:** `translateModule()` failed when target translation file didn't exist.
+
+**Solution:** Now checks if target file exists, loads ALL strings if missing (instead of only changed strings via Git diff).
+
+**Impact:** Enables translation of newly created language directories.
+
+---
+
+### BUG-002: translateLanguage() Error Handling ✅ FIXED
+**Problem:** `translateLanguage()` threw errors directly, causing MCP tool to crash.
+
+**Solution:** Now returns errors in `result.errors` array instead of throwing exceptions.
+
+**Impact:** Better error reporting and graceful failure handling.
+
+---
+
+### BUG-003: validateFileFilter() Regex Pattern ✅ FIXED
+**Problem:** `validateFileFilter()` regex didn't match `values-ru` style folders correctly.
+
+**Solution:** Updated regex pattern to properly match Android resource folder naming conventions.
+
+**Impact:** Correct file filtering for all language variants.
+
+---
+
+## E2E Tests
+
+End-to-end tests (`tests/e2e/run_tests.py`) now validate all 3 bug fixes above.
 
 ## License
 

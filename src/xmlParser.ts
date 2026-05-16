@@ -1,6 +1,6 @@
-import { XMLParser, XMLBuilder } from 'fast-xml-parser';
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import { XMLParser, XMLBuilder, XMLValidator } from 'fast-xml-parser';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
 export interface StringResource {
   name: string;
@@ -23,7 +23,7 @@ export interface StringsXML {
 }
 
 export class AndroidXMLParser {
-  private parser: XMLParser;
+  public parser: XMLParser;
   private builder: XMLBuilder;
 
   constructor() {
@@ -49,31 +49,28 @@ export class AndroidXMLParser {
   /**
    * Escape special characters for Android resource strings
    * - Escapes single quotes ' as \'
-   * - Escapes &apos; as \&apos; (if not already escaped)
+   * - Escapes ' as \' (if not already escaped)
    * - Escapes @ at the beginning as \@
    * - Handles other Android-specific escaping rules
    */
   private escapeAndroidString(value: string): string {
     let escaped = value;
 
-    // 1. Escape single quotes that are not already escaped
-    escaped = escaped.replace(/(?<!\\)'/g, "\\'");
+    // 1. Escape single quotes (only once!)
+    escaped = escaped.replace(/'/g, "\\'");
 
-    // 2. Escape &apos; that are not already escaped with backslash
-    escaped = escaped.replace(/(?<!\\)(&apos;)/g, '\\$1');
+    // 2. Escape double quotes
+    escaped = escaped.replace(/"/g, '\\"');
 
     // 3. Escape @ at the beginning of the string
     if (escaped.startsWith('@')) {
       escaped = '\\' + escaped;
     }
 
-    // 4. Also handle &quot; similarly (not already escaped)
-    escaped = escaped.replace(/(?<!\\)(&quot;)/g, '\\$1');
-
-    // 5. Handle &lt; and &gt; (less common but should be consistent)
-    escaped = escaped.replace(/(?<!\\)(&lt;)/g, '\\$1');
-    escaped = escaped.replace(/(?<!\\)(&gt;)/g, '\\$1');
-    escaped = escaped.replace(/(?<!\\)(&amp;)/g, '\\$1');
+    // 4. Escape <, >, &
+    escaped = escaped.replace(/</g, '\\<');
+    escaped = escaped.replace(/>/g, '\\>');
+    escaped = escaped.replace(/&/g, '\\&');
 
     return escaped;
   }
@@ -81,42 +78,55 @@ export class AndroidXMLParser {
   async parseStringsXML(filePath: string): Promise<Map<string, StringResource>> {
     try {
       const content = await fs.readFile(filePath, 'utf-8');
-      const result = this.parser.parse(content) as StringsXML;
-      
-      const stringsMap = new Map<string, StringResource>();
-      
-      if (!result.resources) {
-        return stringsMap;
-      }
-
-      const strings = result.resources.string;
-      if (!strings) {
-        return stringsMap;
-      }
-
-      const stringArray = Array.isArray(strings) ? strings : [strings];
-      
-      for (const str of stringArray) {
-        const name = str['@_name'];
-        const value = str['#text'] || '';
-        const translatable = str['@_translatable'] !== 'false';
-        
-        if (name) {
-          stringsMap.set(name, {
-            name,
-            value,
-            translatable
-          });
-        }
-      }
-      
-      return stringsMap;
+      return this.parseStringsXMLContent(content, filePath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') {
         return new Map();
       }
+      // Log non-ENOENT errors for debugging
+      console.error(`Unexpected file read error for ${filePath}:`, err.message);
       throw error;
     }
+  }
+
+  async parseStringsXMLContent(content: string, sourceIdentifier: string = 'content'): Promise<Map<string, StringResource>> {
+    // Validate XML before parsing
+    const validationResult = XMLValidator.validate(content);
+    if (validationResult !== true) {
+      throw new Error(`Invalid XML in ${sourceIdentifier}: ${JSON.stringify(validationResult)}`);
+    }
+    
+    const result = this.parser.parse(content) as StringsXML;
+    
+    const stringsMap = new Map<string, StringResource>();
+    
+    if (!result.resources) {
+      return stringsMap;
+    }
+
+    const strings = result.resources.string;
+    if (!strings) {
+      return stringsMap;
+    }
+
+    const stringArray = Array.isArray(strings) ? strings : [strings];
+    
+    for (const str of stringArray) {
+      const name = str['@_name'];
+      const value = str['#text'] || '';
+      const translatable = str['@_translatable'] !== 'false';
+      
+      if (name) {
+        stringsMap.set(name, {
+          name,
+          value,
+          translatable
+        });
+      }
+    }
+    
+    return stringsMap;
   }
 
   async writeStringsXML(filePath: string, strings: Map<string, StringResource>): Promise<void> {

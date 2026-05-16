@@ -1,0 +1,8 @@
+[core]
+	repositoryformatversion = 0
+	filemode = false
+	bare = true
+	worktree = /mnt/AGI-DATA/СОФТ/RooCodeInc-Roo-Code/MCP-СЕРВЕРЫ/MCP-TRANSLATE/ANDROID-I18N-MCP/REPO/tests/e2e/test_range
+[user]
+	email = test@test.com
+	name = Test User

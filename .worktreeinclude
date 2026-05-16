@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+build/
+dist/
+
+# Environment & config
+.env
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.swn
+*.bak
+*.orig
+*.tmp
+
+# IDE & Editor configs
+.idea/
+.vscode/
+*.iml
+*.sublime-*
+
+# Project specific
+coverage/
+.roo/
+*.tsbuildinfo
+
+# Test output
+.nyc_output/
