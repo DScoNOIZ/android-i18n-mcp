@@ -67,10 +67,11 @@ export class AndroidXMLParser {
       escaped = '\\' + escaped;
     }
 
-    // 4. Escape <, >, &
+    // 4. Escape & FIRST (must be before < and > to avoid double-escaping)
+    escaped = escaped.replace(/&/g, '\\&');
+    // 5. Then escape < and >
     escaped = escaped.replace(/</g, '\\<');
     escaped = escaped.replace(/>/g, '\\>');
-    escaped = escaped.replace(/&/g, '\\&');
 
     return escaped;
   }

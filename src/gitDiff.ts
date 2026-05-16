@@ -355,7 +355,6 @@ export class GitDiffAnalyzer {
    */
   private async findNewStringsModules(repoRoot: string, workingDir: string): Promise<string[]> {
     const newModules: string[] = [];
-    const valuesPattern = /[\/\\]values[\/\\]?$/;
     const normalizedRepoRoot = path.resolve(repoRoot);
     const normalizedWorkingDir = path.resolve(workingDir);
     
