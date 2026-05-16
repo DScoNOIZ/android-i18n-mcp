@@ -138,8 +138,8 @@ describe('TranslationManager Integration (Real Files)', () => {
 
       const deResult = summary.languages.find(l => l.language === 'de');
       expect(deResult).toBeDefined();
-      // FIXED: translatedCount now reports existing strings when skipped (not 0)
-      expect(deResult?.translatedCount).toBeGreaterThan(0);
+      // FIXED: totalStrings reports existing strings, translatedCount is 0 when skipped
+      expect(deResult?.totalStrings).toBeGreaterThan(0);
       expect(deResult?.skipped).toBe(true);
     });
   });

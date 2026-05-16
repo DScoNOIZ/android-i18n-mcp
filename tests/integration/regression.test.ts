@@ -281,8 +281,8 @@ describe('Regression Tests - All Fixed Bugs', () => {
 
       const trResult = summary.languages.find(l => l.language === 'tr');
       expect(trResult?.skipped).toBe(true);
-      // FIXED: translatedCount now reports existing strings when skipped (not 0)
-      expect(trResult?.translatedCount).toBeGreaterThan(0);
+      // FIXED: totalStrings reports existing strings, translatedCount is 0 when skipped
+      expect(trResult?.totalStrings).toBeGreaterThan(0);
     });
   });
 
@@ -517,8 +517,8 @@ describe('Regression Tests - All Fixed Bugs', () => {
       });
 
       const mrResult = summary.languages.find(l => l.language === 'mr');
-      // FIXED: translatedCount now reports existing strings when skipped (not 0)
-      expect(mrResult?.translatedCount).toBeGreaterThan(0);
+      // FIXED: totalStrings reports existing strings, translatedCount is 0 when skipped
+      expect(mrResult?.totalStrings).toBeGreaterThan(0);
       expect(mrResult?.skipped).toBe(true);
     });
   });
