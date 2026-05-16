@@ -45,7 +45,9 @@ export interface TranslationResult {
   language: string;
   /** Path to the translated file */
   filePath: string;
-  /** Number of strings successfully translated */
+  /** Total number of strings in the source file (for consistent reporting) */
+  totalStrings: number;
+  /** Number of strings successfully translated in this run */
   translatedCount: number;
   /** Array of error messages if any occurred */
   errors: string[];
@@ -511,7 +513,8 @@ export class TranslationManager {
               summary.languages.push({
                 language: lang,
                 filePath: targetPath,
-                translatedCount: targetStrings.size, // Count existing translations
+                totalStrings: targetStrings.size,
+                translatedCount: 0, // No new translations
                 errors: [],
                 skipped: true,
                 message: `Language '${lang}' already exists with ${targetStrings.size} strings. Skipping.`
@@ -555,7 +558,8 @@ export class TranslationManager {
               summary.languages.push({
                 language: lang,
                 filePath: targetPath,
-                translatedCount: existingStrings.size,
+                totalStrings: existingStrings.size,
+                translatedCount: 0, // No new translations
                 errors: [],
                 skipped: true,
                 message: `No changes needed for '${lang}' (${existingStrings.size} strings already translated)`
@@ -580,7 +584,8 @@ export class TranslationManager {
         
         const result = await this.translateLanguage(
           moduleDir, lang, stringsToTranslateForLang,
-          changes.deleted, keyOrder, changes.orderChanged, innerProgressCallback
+          changes.deleted, keyOrder, changes.orderChanged, innerProgressCallback,
+          allTranslatableStrings.size
         );
         
         // Accumulate processed count for next language
@@ -638,7 +643,8 @@ export class TranslationManager {
     
     return await this.translateLanguage(
       moduleDir, language, stringsToTranslate,
-      changes.deleted, keyOrder, changes.orderChanged, innerProgressCallback
+      changes.deleted, keyOrder, changes.orderChanged, innerProgressCallback,
+      stringsToTranslate.size
     );
   }
 
@@ -646,9 +652,10 @@ export class TranslationManager {
   private async translateLanguage(
     moduleDir: string, language: string, stringsToTranslate: Map<string, string>,
     deletedKeys: Set<string>, keyOrder: string[], forceOrderSync: boolean = false,
-    onProgress?: (current: number, total: number, message: string) => void
+    onProgress?: (current: number, total: number, message: string) => void,
+    totalSourceStrings: number = 0
   ): Promise<TranslationResult> {
-    const result: TranslationResult = { language, filePath: '', translatedCount: 0, errors: [] };
+    const result: TranslationResult = { language, filePath: '', totalStrings: totalSourceStrings, translatedCount: 0, errors: [] };
 
     try {
       const langFolder = this.LANGUAGE_FOLDER_MAP[language];
@@ -685,6 +692,7 @@ export class TranslationManager {
         }
 
         await this.xmlParser.mergeTranslationsWithOrder(targetPath, translations, keyOrder);
+        result.totalStrings = totalSourceStrings || stringsToTranslate.size;
         result.translatedCount = translations.size;
       } else if (deletedKeys.size > 0 || forceOrderSync) {
         const existingStrings = await this.xmlParser.parseStringsXML(targetPath);
