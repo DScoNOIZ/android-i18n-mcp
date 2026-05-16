@@ -26,7 +26,7 @@ class McpClient:
     def start(self):
         """Starts MCP server as a subprocess."""
         # Ensure the project is built
-        build_path = os.path.join(os.getcwd(), 'build', 'index.js')
+        build_path = os.path.join(os.getcwd(), 'build', 'src', 'index.js')
         if not os.path.exists(build_path):
             raise FileNotFoundError("First run 'npm run build'")
 
